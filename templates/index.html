@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AI Crops Monitoring</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 2em; }
+        .section { margin-bottom: 2em; }
+        label { display: block; margin-top: 1em; }
+        input, select, button { margin-top: 0.5em; }
+        .result { margin-top: 1em; padding: 1em; background: #f0f0f0; }
+        table { width: 100%; border-collapse: collapse; margin-top: 1em; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
+        th { background-color: #f2f2f2; }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+</head>
+<body>
+    <h1>AI Crops Monitoring</h1>
+
+    <div class="section">
+        <h2>Predict Yield</h2>
+        <form id="yieldForm">
+            <label>
+                Area:
+                <input type="text" name="area" required>
+            </label>
+            <label>
+                Year:
+                <input type="number" name="year" required>
+            </label>
+            <button type="submit">Predict</button>
+        </form>
+        <div id="yieldResult" class="result"></div>
+    </div>
+
+    <div class="section">
+        <h2>Yield Summary Dashboard</h2>
+        <button onclick="fetchGroupedYield()">Show Summary</button>
+        <div id="dashboardSummary"></div>
+        <div id="yieldChart"></div>
+    </div>
+
+    <div class="section">
+        <h2>Estimate Crop Damage by Wind Speed</h2>
+        <form id="damageForm">
+            <label>
+                Wind Speed (kph):
+                <input type="number" name="wind" required>
+            </label>
+            <button type="submit">Estimate</button>
+        </form>
+        <div id="damageResult" class="result"></div>
+    </div>
+
+    <div class="section">
+        <h2>Predict Yield Based on Estimated Crop Damage</h2>
+        <form id="yieldByDamageForm">
+            <label>
+                Area:
+                <input type="text" name="area" required>
+            </label>
+            <label>
+                Year:
+                <input type="number" name="year" required>
+            </label>
+            <label>
+                Estimated Crop Damage (%):
+                <input type="number" name="damage_percent" min="0" max="100" required>
+            </label>
+            <button type="submit">Predict Yield</button>
+        </form>
+        <div id="yieldByDamageResult" class="result"></div>
+    </div>
+
+    <script>
+        document.getElementById('yieldForm').onsubmit = async function(e) {
+            e.preventDefault();
+            const area = this.area.value;
+            const year = this.year.value;
+            const res = await fetch('/predict-yield', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ area, year })
+            });
+            const data = await res.json();
+            document.getElementById('yieldResult').innerText = res.ok
+                ? `Predicted yield for ${data.area} in ${data.year}: ${data.predicted_yield}`
+                : data.error;
+        };
+
+        async function fetchGroupedYield() {
+            const res = await fetch('/grouped-yield');
+            const data = await res.json();
+            if (Array.isArray(data)) {
+                renderYieldChart(data);
+                renderDashboardSummary(data);
+            } else {
+                document.getElementById('dashboardSummary').innerText = data.error || 'No data';
+            }
+        }
+
+        function renderDashboardSummary(data) {
+            if (!data.length) {
+                document.getElementById('dashboardSummary').innerHTML = 'No data';
+                return;
+            }
+            // Group by area
+            const areas = [...new Set(data.map(d => d.area))];
+            const years = [...new Set(data.map(d => d.year))].sort();
+            let html = `<table>
+                <thead>
+                    <tr>
+                        <th>Area</th>
+                        ${years.map(y => `<th>${y}</th>`).join('')}
+                        <th>Average Yield</th>
+                    </tr>
+                </thead>
+                <tbody>`;
+            for (const area of areas) {
+                const yields = years.map(year => {
+                    const found = data.find(d => d.area === area && d.year == year);
+                    return found ? found.predicted_yield : '-';
+                });
+                const avg = (
+                    yields.filter(v => typeof v === 'number').reduce((a, b) => a + b, 0) /
+                    yields.filter(v => typeof v === 'number').length
+                ).toFixed(2);
+                html += `<tr>
+                    <td>${area}</td>
+                    ${yields.map(v => `<td>${v}</td>`).join('')}
+                    <td>${isNaN(avg) ? '-' : avg}</td>
+                </tr>`;
+            }
+            html += '</tbody></table>';
+            document.getElementById('dashboardSummary').innerHTML = html;
+        }
+
+        function renderYieldChart(data) {
+            // Group data by area
+            const areas = [...new Set(data.map(d => d.area))];
+            const years = [...new Set(data.map(d => d.year))].sort();
+            const series = areas.map(area => ({
+                name: area,
+                data: years.map(year => {
+                    const found = data.find(d => d.area === area && d.year == year);
+                    return found ? found.predicted_yield : null;
+                })
+            }));
+
+            const options = {
+                chart: {
+                    type: 'line',
+                    height: 350
+                },
+                series: series,
+                xaxis: {
+                    categories: years,
+                    title: { text: 'Year' }
+                },
+                yaxis: {
+                    title: { text: 'Predicted Yield' }
+                },
+                title: {
+                    text: 'Predicted Yield by Area and Year'
+                }
+            };
+
+            if (window.yieldChart) {
+                window.yieldChart.updateOptions(options);
+            } else {
+                window.yieldChart = new ApexCharts(document.querySelector("#yieldChart"), options);
+                window.yieldChart.render();
+            }
+        }
+
+        document.getElementById('damageForm').onsubmit = async function(e) {
+            e.preventDefault();
+            const wind = this.wind.value;
+            const res = await fetch(`/estimate-crop-damage?wind=${wind}`);
+            const data = await res.json();
+            document.getElementById('damageResult').innerText = res.ok
+                ? `Estimated Crop Damage: ${data.estimated_crop_damage_percent} (Wind: ${data.wind_kph} kph)`
+                : data.error;
+        };
+
+        document.getElementById('yieldByDamageForm').onsubmit = async function(e) {
+            e.preventDefault();
+            const area = this.area.value;
+            const year = this.year.value;
+            const damage_percent = this.damage_percent.value;
+            const res = await fetch('/predict-yield-by-damage', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ area, year, damage_percent })
+            });
+            const data = await res.json();
+            document.getElementById('yieldByDamageResult').innerText = res.ok
+                ? `Predicted yield for ${data.area} in ${data.year} with ${data.damage_percent}% damage: ${data.predicted_yield}`
+                : data.error;
+        };
+    </script>
+</body>
+</html>
